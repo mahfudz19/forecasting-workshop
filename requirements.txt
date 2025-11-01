@@ -1,5 +1,6 @@
-Flask==2.0.3
-requests==2.26.0
-numpy==1.21.2
-yfinance==0.2.66
-pytest==8.4.2
+Flask>=2.0.3
+requests>=2.26.0
+numpy>=1.21.2
+yfinance>=0.2.66
+pytest>=8.4.2
+scikit-learn>=1.5.0
