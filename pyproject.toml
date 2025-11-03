@@ -1,12 +1,12 @@
 [tool.poetry]
-name = "my-python-app"
+name = "forecasting-workshop"
 version = "0.1.0"
-description = "A simple Python application."
-authors = ["Your Name <youremail@example.com>"]
+description = "Workshop project for time-series forecasting."
+authors = ["mahfudz19 mfz.masyhur97@gmail.com"]
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = "^3.8"
+python = "^3.10"
 # Add your project dependencies here
 
 [build-system]
