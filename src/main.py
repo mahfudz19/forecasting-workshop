@@ -8,23 +8,33 @@ import matplotlib.pyplot as plt
 
 def evaluasi_RMSE_MAE(predictions: list, y_test_actual_original_scale: list):
     print("\n--- Evaluasi Akurasi Robot LSTM ---")
-    # Pastikan panjang prediksi dan harga asli sama
-    # Jika tidak sama, mungkin ada masalah di create_sequences atau prediksi
-    if len(predictions) != len(y_test_actual_original_scale):
-        print(
-            f"Peringatan: Panjang prediksi ({len(predictions)}) tidak sama dengan panjang harga asli ({len(y_test_actual_original_scale)})."
-        )
-        # Ambil bagian yang lebih pendek untuk perbandingan
-        min_len = min(len(predictions), len(y_test_actual_original_scale))
-        predictions = predictions[:min_len]
-        y_test_actual_original_scale = y_test_actual_original_scale[:min_len]
-
-    # 2. Hitung Metrik Akurasi
     rmse = np.sqrt(mean_squared_error(y_test_actual_original_scale, predictions))
     mae = mean_absolute_error(y_test_actual_original_scale, predictions)
 
     print(f"RMSE (Root Mean Squared Error): {rmse:.4f}")
     print(f"MAE (Mean Absolute Error): {mae:.4f}")
+
+    persistence_preds = y_test_actual_original_scale[:-1]
+    actual_for_persistence = y_test_actual_original_scale[1:]
+
+    if len(persistence_preds) > 0:
+        rmse_persistence = np.sqrt(
+            mean_squared_error(actual_for_persistence, persistence_preds)
+        )
+        mae_persistence = mean_absolute_error(actual_for_persistence, persistence_preds)
+        print("\n--- Perbandingan dengan Baseline (Persistence Model) ---")
+        print(f"RMSE (Persistence): {rmse_persistence:.4f}")
+        print(f"MAE (Persistence): {mae_persistence:.4f}")
+
+        if rmse < rmse_persistence:
+            print(
+                ">>> KESIMPULAN: Model LSTM lebih baik dari baseline sederhana. (Bagus!)"
+            )
+        else:
+            print(
+                ">>> KESIMPULAN: Model LSTM belum lebih baik dari baseline sederhana."
+            )
+
     print("--- Evaluasi Selesai ---")
 
 
@@ -98,9 +108,16 @@ def create_seq_for_eval(data: np.ndarray, window_size: int):
 
 
 def main():
-    core = Core()
+    core = Core(
+        window_size=10,
+        epochs=150,
+        hidden_size=100,
+        num_layers=2,
+        lr=5e-4,
+        batch_size=16,
+    )
 
-    data = core.fetch_stock_data("AAPL", "1y")
+    data = core.fetch_stock_data("AAPL", "5y")
     train_data, test_data, scaler = core.preprocess_stock_data(data)
     print(f"Train data: {len(train_data)} baris, Test data: {len(test_data)} baris")
 
