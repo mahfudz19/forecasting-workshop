@@ -7,15 +7,9 @@ This is a simple Python application designed to demonstrate basic project struct
 ```
 my-python-app
 ├── src
-│   ├── __init__.py
 │   ├── main.py
 │   ├── app
-│   │   ├── __init__.py
 │   │   └── core.py
-│   └── utils
-│       └── __init__.py
-├── tests
-│   └── test_core.py
 ├── pyproject.toml
 ├── requirements.txt
 ├── .gitignore
@@ -34,13 +28,6 @@ To run the application, execute the following command:
 
 ```
 python src/main.py
-```
-
-## Testing
-To run the tests, use the following command:
-
-```
-pytest tests/test_core.py
 ```
 
 ## Contributing
