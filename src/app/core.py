@@ -10,41 +10,17 @@ import numpy as np
 from typing import Tuple
 
 
-class StockDataset(Dataset):
-    def __init__(self, texts, tokenizer, max_length=512):
-        self.tokenizer = tokenizer
-        self.input_ids = []
-        self.attn_masks = []
-
-        for text in texts:
-            # Tokenize setiap "kalimat" harga (string tunggal)
-            encodings = tokenizer(
-                text,
-                truncation=True,
-                padding="max_length",
-                max_length=max_length,
-                return_tensors="pt",
-            )
-            self.input_ids.append(encodings["input_ids"])
-            self.attn_masks.append(encodings["attention_mask"])
-
-    def __len__(self):
-        return len(self.input_ids)
-
-    def __getitem__(self, idx):
-        return {
-            "input_ids": self.input_ids[idx].flatten(),
-            "attention_mask": self.attn_masks[idx].flatten(),
-        }
-
-
 # Kelas Model LSTM Sederhana
 class SimpleLSTM(nn.Module):
-    def __init__(self, input_size=1, hidden_size=50, num_layers=1, output_size=1):
+    def __init__(
+        self, input_size=1, hidden_size=50, num_layers=1, output_size=1, dropout=0.0
+    ):
         super(SimpleLSTM, self).__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
-        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
+        self.lstm = nn.LSTM(
+            input_size, hidden_size, num_layers, batch_first=True, dropout=dropout
+        )
         self.fc = nn.Linear(hidden_size, output_size)
 
     def forward(self, x):
@@ -65,6 +41,7 @@ class Core:
         num_layers: int = 1,
         lr: float = 0.001,
         batch_size: int = 32,
+        dropout: float = 0.0,
     ):
         self.window_size = window_size
         self.epochs = epochs
@@ -72,6 +49,7 @@ class Core:
         self.num_layers = num_layers
         self.lr = lr
         self.batch_size = batch_size
+        self.dropout = dropout
 
     def main_feature(self):
         return "This is the main feature of the application."
@@ -81,9 +59,10 @@ class Core:
 
     def create_sequences(self, data: np.ndarray):
         X, y = [], []
+        close_price_index = 3
         for i in range(len(data) - self.window_size):
             X.append(data[i : (i + self.window_size)])
-            y.append(data[i + self.window_size])
+            y.append(data[i + self.window_size, close_price_index])
         return np.array(X), np.array(y)
 
     # Fungsi baru: Ambil data saham historis
@@ -97,7 +76,7 @@ class Core:
         try:
             stock = yf.Ticker(symbol)
             data = stock.history(period=period)
-            return data[["Close"]]  # Fokus pada harga penutupan untuk time series
+            return data[["Open", "High", "Low", "Close", "Volume"]]
         except Exception as e:
             raise ValueError(f"Gagal mengambil data untuk {symbol}: {str(e)}")
 
@@ -111,9 +90,11 @@ class Core:
         - Fit scaler HANYA pada data training.
         - Transform kedua set data.
         """
-        # 1. Bersihkan: Isi missing values dengan forward fill
+        # 1. Pilih fitur yang relevan: Open, High, Low, Close, Volume
         data = data.ffill()
-        all_values = data[["Close"]].values
+        features = ["Open", "High", "Low", "Close", "Volume"]
+        data_featured = data[features].ffill()
+        all_values = data_featured.values
 
         # 2. Split data MENTAH terlebih dahulu
         train_values, test_values = train_test_split(
@@ -136,9 +117,9 @@ class Core:
 
         # Ubah data ke format tensor PyTorch
         X_train = torch.tensor(X_train, dtype=torch.float32)
-        y_train = torch.tensor(y_train, dtype=torch.float32)
+        y_train = torch.tensor(y_train, dtype=torch.float32).unsqueeze(1)
         X_test = torch.tensor(X_test, dtype=torch.float32)
-        y_test = torch.tensor(y_test, dtype=torch.float32)
+        y_test = torch.tensor(y_test, dtype=torch.float32).unsqueeze(1)
 
         return X_train, y_train, X_test, y_test
 
@@ -176,6 +157,7 @@ class Core:
         train_data: np.ndarray,
         test_data: np.ndarray,
         scaler: MinMaxScaler,
+        close_price_index=3,
     ) -> list:
         """
         Forecasting harga saham dengan LSTM, metode yang lebih cocok untuk time series numerik.
@@ -183,10 +165,14 @@ class Core:
 
         # --- Langkah 1: Siapkan Data untuk LSTM ---
         X_train, y_train, X_test, y_test = self.set_data(train_data, test_data)
+        num_features = X_train.shape[2]
 
         # --- Langkah 2: Buat dan Latih Model LSTM ---
         model = SimpleLSTM(
-            input_size=1, hidden_size=self.hidden_size, num_layers=self.num_layers
+            input_size=num_features,
+            hidden_size=self.hidden_size,
+            num_layers=self.num_layers,
+            dropout=self.dropout,
         )
         criterion = nn.MSELoss()
         optimizer = torch.optim.Adam(model.parameters(), lr=self.lr)
@@ -200,9 +186,18 @@ class Core:
         # Ubah hasil prediksi kembali ke format numpy
         predictions = test_predict.numpy()
 
-        # Inverse scale (ubah angka 0-1 kembali ke harga asli)
-        predictions_scaled = scaler.inverse_transform(predictions).flatten().tolist()
+        # 1. Reshape prediksi agar menjadi kolom tunggal
+        predictions_scaled = predictions.reshape(-1, 1)
 
-        print(f"\nPrediksi harga LSTM selesai ({len(predictions_scaled)})")
+        # 2. Buat array dummy dengan shape (jumlah_prediksi, jumlah_fitur_asli_scaler)
+        dummy_array = np.zeros((len(predictions_scaled), scaler.n_features_in_))
+        dummy_array[:, close_price_index] = predictions_scaled.flatten()
 
-        return predictions_scaled
+        # 3. Lakukan inverse transform pada array dummy
+        predictions_original_scale = scaler.inverse_transform(dummy_array)[
+            :, close_price_index
+        ]
+
+        print(f"Prediksi harga LSTM selesai ({len(predictions_original_scale)})")
+
+        return predictions_original_scale.tolist()
