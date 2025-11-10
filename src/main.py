@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
 import matplotlib.pyplot as plt
+from typing import Dict
+import pandas_ta as ta
 
 
 def evaluasi_RMSE_MAE(predictions: list, y_test_actual_original_scale: list):
@@ -61,7 +63,8 @@ def plot_predictions(
 
 
 def tableGenerate(
-    scaler: MinMaxScaler,
+    scalers: Dict[str, MinMaxScaler],
+    features: list,
     X_test_raw_scaled: np.ndarray,
     predictions: list,
     y_test_acl_ori_scl: list,
@@ -71,11 +74,14 @@ def tableGenerate(
     print("\n--- Tabel Perbandingan Prediksi ---")
 
     num_samples, window_size, num_features = X_test_raw_scaled.shape
-    X_test_reshaped_for_scaler = X_test_raw_scaled.reshape(-1, num_features)
-    X_test_original_scale_flat = scaler.inverse_transform(X_test_reshaped_for_scaler)
-    X_test_original_scale = X_test_original_scale_flat.reshape(
-        num_samples, window_size, num_features
-    )
+    X_test_original_scale = np.zeros_like(X_test_raw_scaled)
+    for i, feature_name in enumerate(features):
+        scaler = scalers[feature_name]
+        column_scaled = X_test_raw_scaled[:, :, i].reshape(-1, 1)
+        column_original = scaler.inverse_transform(column_scaled)
+        X_test_original_scale[:, :, i] = column_original.reshape(
+            num_samples, window_size
+        )
 
     # Buat list untuk data tabel
     table_data = []
@@ -113,27 +119,23 @@ def create_seq_for_eval(data: np.ndarray, window_size: int, close_price_index: i
 
 def main():
     core = Core(
-        window_size=10,
+        window_size=20,
         epochs=200,
-        hidden_size=64,
-        num_layers=1,
-        lr=1e-3,
+        hidden_size=128,
+        num_layers=2,
+        lr=1e-4,
         batch_size=32,
-        dropout=0.1,
+        dropout=0.2,
     )
 
     data = core.fetch_stock_data("AAPL", "5y")
-    close_price_index = data.columns.get_loc("Close")
-    if close_price_index == -1:
-        raise ValueError("Kolom 'Close' tidak ditemukan dalam data saham.")
 
-    train_data, test_data, scaler = core.preprocess_stock_data(data)
+    train_data, test_data, scalers, features = core.preprocess_stock_data(data)
+    close_price_index = features.index("Close")
     print(f"Train data: {len(train_data)} baris, Test data: {len(test_data)} baris")
 
-    # Ganti pemanggilan fungsi dari GPT ke LSTM
-    # predictions = core.forecast_with_gpt(train_data, test_data, scaler)
     predictions = core.forecast_with_lstm(
-        train_data, test_data, scaler, close_price_index
+        train_data, test_data, scalers, close_price_index
     )
 
     # Ambil y_test (skala 0-1) dari test_data
@@ -141,20 +143,20 @@ def main():
         test_data, core.window_size, close_price_index
     )
 
-    # 1. Buat array dummy dengan shape (jumlah_sampel, jumlah_fitur_asli_scaler)
-    dummy_array_for_y_test = np.zeros((len(y_test_scaled), scaler.n_features_in_))
+    close_scaler = scalers["Close"]
 
-    # 2. Masukkan y_test_scaled (yang sudah 1D) ke kolom 'Close' yang benar
-    dummy_array_for_y_test[:, close_price_index] = y_test_scaled.flatten()
-
-    # 3. Lakukan inverse transform pada array dummy, lalu ambil kembali kolom 'Close'
-    y_test_acl_ori_scl = scaler.inverse_transform(dummy_array_for_y_test)[
-        :, close_price_index
-    ].tolist()
+    y_test_acl_ori_scl = (
+        close_scaler.inverse_transform(y_test_scaled.reshape(-1, 1)).flatten().tolist()
+    )
 
     evaluasi_RMSE_MAE(predictions, y_test_acl_ori_scl)
     tableGenerate(
-        scaler, X_test_raw_scaled, predictions, y_test_acl_ori_scl, close_price_index
+        scalers,
+        features,
+        X_test_raw_scaled,
+        predictions,
+        y_test_acl_ori_scl,
+        close_price_index,
     )
     plot_predictions(y_test_acl_ori_scl, predictions)
 

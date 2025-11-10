@@ -5,9 +5,8 @@ from sklearn.model_selection import train_test_split
 import torch
 import torch.nn as nn
 from tqdm import tqdm
-from torch.utils.data import Dataset
 import numpy as np
-from typing import Tuple
+from typing import Tuple, Dict
 
 
 # Kelas Model LSTM Sederhana
@@ -57,9 +56,8 @@ class Core:
     def helper_function(self, value):
         return value * 2
 
-    def create_sequences(self, data: np.ndarray):
+    def create_sequences(self, data: np.ndarray, close_price_index: int):
         X, y = [], []
-        close_price_index = 3
         for i in range(len(data) - self.window_size):
             X.append(data[i : (i + self.window_size)])
             y.append(data[i + self.window_size, close_price_index])
@@ -83,37 +81,57 @@ class Core:
     # Fungsi baru: Preprocessing data saham
     def preprocess_stock_data(
         self, data: pd.DataFrame, test_size: float = 0.2
-    ) -> Tuple[np.ndarray, np.ndarray, MinMaxScaler]:
+    ) -> Tuple[np.ndarray, np.ndarray, Dict[str, MinMaxScaler], list]:
         """
         Preprocessing data saham untuk forecasting.
+        - Menskalakan setiap fitur secara independen.
         - Split data mentah terlebih dahulu untuk mencegah data leakage.
         - Fit scaler HANYA pada data training.
         - Transform kedua set data.
         """
-        # 1. Pilih fitur yang relevan: Open, High, Low, Close, Volume
+        # 1. Tambahkan indikator dan siapkan fitur
         data = data.ffill()
-        features = ["Open", "High", "Low", "Close", "Volume"]
-        data_featured = data[features].ffill()
-        all_values = data_featured.values
+        data.ta.sma(length=20, append=True)
+        data.ta.rsi(length=14, append=True)
+        data.ta.obv(append=True)
+
+        features = ["Open", "High", "Low", "Close", "Volume", "SMA_20", "RSI_14", "OBV"]
+        # features = ["Open", "High", "Low", "Close", "Volume"]
+
+        data_featured = data[features].dropna()
 
         # 2. Split data MENTAH terlebih dahulu
-        train_values, test_values = train_test_split(
-            all_values, test_size=test_size, shuffle=False
+        train_df, test_df = train_test_split(
+            data_featured, test_size=test_size, shuffle=False
         )
 
-        # 3. Buat dan FIT scaler HANYA pada data training
-        scaler = MinMaxScaler(feature_range=(0, 1))
-        scaler = scaler.fit(train_values)
+        # 3. Buat dan FIT scaler untuk SETIAP FITUR secara terpisah
+        scalers = {}
+        train_data_scaled = train_df.copy()
+        test_data_scaled = test_df.copy()
 
-        # 4. TRANSFORM kedua set data secara terpisah
-        train_data_scaled = scaler.transform(train_values)
-        test_data_scaled = scaler.transform(test_values)
+        for feature_name in features:
+            scaler = MinMaxScaler(feature_range=(0, 1))
+            # Fit scaler HANYA pada data training untuk kolom saat ini
+            scaler.fit(train_df[[feature_name]])
+            scalers[feature_name] = scaler  # Simpan scaler di dictionary
 
-        return train_data_scaled, test_data_scaled, scaler
+            # Transform kolom fitur yang sesuai di data training dan test
+            train_data_scaled[feature_name] = scaler.transform(train_df[[feature_name]])
+            test_data_scaled[feature_name] = scaler.transform(test_df[[feature_name]])
 
-    def set_data(self, train_data: np.ndarray, test_data: np.ndarray):
-        X_train, y_train = self.create_sequences(train_data)
-        X_test, y_test = self.create_sequences(test_data)
+        return (
+            train_data_scaled.values,  # Kirim sebagai numpy array
+            test_data_scaled.values,  # Kirim sebagai numpy array
+            scalers,
+            features,
+        )
+
+    def set_data(
+        self, train_data: np.ndarray, test_data: np.ndarray, close_price_index: int
+    ):
+        X_train, y_train = self.create_sequences(train_data, close_price_index)
+        X_test, y_test = self.create_sequences(test_data, close_price_index)
 
         # Ubah data ke format tensor PyTorch
         X_train = torch.tensor(X_train, dtype=torch.float32)
@@ -156,15 +174,17 @@ class Core:
         self,
         train_data: np.ndarray,
         test_data: np.ndarray,
-        scaler: MinMaxScaler,
-        close_price_index=3,
+        scalers: Dict[str, MinMaxScaler],
+        close_price_index: int,
     ) -> list:
         """
         Forecasting harga saham dengan LSTM, metode yang lebih cocok untuk time series numerik.
         """
 
         # --- Langkah 1: Siapkan Data untuk LSTM ---
-        X_train, y_train, X_test, y_test = self.set_data(train_data, test_data)
+        X_train, y_train, X_test, y_test = self.set_data(
+            train_data, test_data, close_price_index
+        )
         num_features = X_train.shape[2]
 
         # --- Langkah 2: Buat dan Latih Model LSTM ---
@@ -186,17 +206,13 @@ class Core:
         # Ubah hasil prediksi kembali ke format numpy
         predictions = test_predict.numpy()
 
-        # 1. Reshape prediksi agar menjadi kolom tunggal
-        predictions_scaled = predictions.reshape(-1, 1)
+        # Dapatkan scaler khusus untuk kolom 'Close'
+        close_scaler = scalers["Close"]  # Ambil scaler 'Close' dari dictionary
 
-        # 2. Buat array dummy dengan shape (jumlah_prediksi, jumlah_fitur_asli_scaler)
-        dummy_array = np.zeros((len(predictions_scaled), scaler.n_features_in_))
-        dummy_array[:, close_price_index] = predictions_scaled.flatten()
-
-        # 3. Lakukan inverse transform pada array dummy
-        predictions_original_scale = scaler.inverse_transform(dummy_array)[
-            :, close_price_index
-        ]
+        # Lakukan inverse transform pada prediksi
+        predictions_original_scale = close_scaler.inverse_transform(
+            predictions
+        ).flatten()
 
         print(f"Prediksi harga LSTM selesai ({len(predictions_original_scale)})")
 
